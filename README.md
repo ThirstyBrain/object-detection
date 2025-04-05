@@ -1,4 +1,4 @@
-```markdown
+
 # 🧠 EyeStream - Real-time Object Detection Web App
 
 EyeStream is a full-stack AI-powered application that captures webcam video from the browser, streams it to a Django backend for real-time object detection using **YOLOv8**, and displays the results with bounding boxes and stats.
