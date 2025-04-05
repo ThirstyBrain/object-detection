@@ -30,9 +30,6 @@ graph TD
 ### 📁 Frontend - React UI
 
 #### 1. Navigate to the UI project folder:
-```bash
-cd frontend
-```
 
 #### 2. Install dependencies:
 ```bash
