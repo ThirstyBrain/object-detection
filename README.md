@@ -48,9 +48,6 @@ npm start
 ### 🖥️ Backend - Django API
 
 #### 1. Navigate to the backend project folder:
-```bash
-cd backend
-```
 
 #### 2. Install dependencies:
 ```bash
