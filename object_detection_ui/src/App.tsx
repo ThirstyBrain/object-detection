@@ -1,4 +1,4 @@
-// src/App.tsx
+// Updates for src/App.tsx to include suspicious behavior alerts
 
 import React, { useEffect, useRef, useState } from 'react';
 import './App.css';
@@ -9,6 +9,14 @@ interface DetectionResult {
   bbox: [number, number, number, number]; // [x1, y1, x2, y2]
 }
 
+interface Alert {
+  id: string;
+  type: string;
+  details: string;
+  timestamp: Date;
+  isNew: boolean;
+}
+
 const App: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -16,9 +24,43 @@ const App: React.FC = () => {
   const [detections, setDetections] = useState<DetectionResult[]>([]);
   const [fps, setFps] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [suspiciousBehaviorEnabled, setSuspiciousBehaviorEnabled] = useState(true);
   
   const streamInterval = useRef<number | null>(null);
   const fpsCounter = useRef({ count: 0, lastUpdate: Date.now() });
+  const alertSound = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    // Create audio element for alerts
+    alertSound.current = new Audio('/alert-sound.mp3'); // Add an alert sound file to your public folder
+    
+    // Initialize WebSocket for receiving behavior alerts (optional)
+    const connectWebSocket = () => {
+      const ws = new WebSocket('ws://localhost:8000/ws/alerts/');
+      
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'behavior_alert') {
+          addAlert(data.behavior, JSON.stringify(data.details));
+        }
+      };
+      
+      ws.onclose = () => {
+        // Try to reconnect in 3 seconds
+        setTimeout(connectWebSocket, 3000);
+      };
+    };
+    
+    // Uncomment if you set up WebSockets in your Django app
+    // connectWebSocket();
+    
+    return () => {
+      // Cleanup
+    };
+  }, []);
 
   // Initialize webcam
   const startWebcam = async () => {
@@ -30,6 +72,7 @@ const App: React.FC = () => {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.onloadedmetadata = () => {
+
           if (videoRef.current && canvasRef.current) { // Check both refs
             videoRef.current.play();
             // Set canvas dimensions to match video
@@ -37,14 +80,39 @@ const App: React.FC = () => {
             canvasRef.current.height = videoRef.current.videoHeight;
           }
 
-
-
         };
       }
     } catch (err) {
       setError(`Failed to access webcam: ${err}`);
       console.error("Error accessing webcam:", err);
     }
+  };
+
+  // Add a new alert
+  const addAlert = (type: string, details: string) => {
+    const newAlert: Alert = {
+      id: Date.now().toString(),
+      type,
+      details,
+      timestamp: new Date(),
+      isNew: true
+    };
+    
+    setAlerts(prevAlerts => [newAlert, ...prevAlerts].slice(0, 50)); // Keep last 50 alerts
+    
+    // Play sound
+    if (alertSound.current) {
+      alertSound.current.play().catch(err => console.error("Error playing alert sound:", err));
+    }
+    
+    // Remove "new" highlight after 5 seconds
+    setTimeout(() => {
+      setAlerts(prevAlerts => 
+        prevAlerts.map(alert => 
+          alert.id === newAlert.id ? { ...alert, isNew: false } : alert
+        )
+      );
+    }, 5000);
   };
 
   // Start streaming frames to server
@@ -63,7 +131,7 @@ const App: React.FC = () => {
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       
-      // Draw current video frame to canvas (for processing)
+      // Draw current video frame to canvas
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       
       // Convert canvas to blob
@@ -75,6 +143,11 @@ const App: React.FC = () => {
           const formData = new FormData();
           formData.append('image', blob, 'frame.jpg');
           
+          // Add suspicious behavior flag to request
+          if (suspiciousBehaviorEnabled) {
+            formData.append('detect_behavior', 'true');
+          }
+          
           // Send to Django backend
           const response = await fetch('http://localhost:8000/api/detect/', {
             method: 'POST',
@@ -85,6 +158,13 @@ const App: React.FC = () => {
           
           const results = await response.json();
           setDetections(results.detections);
+          
+          // Check for alerts in response
+          if (results.alerts && results.alerts.length > 0) {
+            results.alerts.forEach((alert: any) => {
+              addAlert(alert.behavior, JSON.stringify(alert.details));
+            });
+          }
           
           // Update FPS counter
           fpsCounter.current.count++;
@@ -124,8 +204,18 @@ const App: React.FC = () => {
     ctx: CanvasRenderingContext2D, 
     detections: DetectionResult[]
   ) => {
-    // Clear previous drawings (canvas will only show overlay, not video)
+    // Clear previous drawings
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    
+    // Redraw the video frame
+    if (videoRef.current) {
+      ctx.drawImage(
+        videoRef.current, 
+        0, 0, 
+        ctx.canvas.width, 
+        ctx.canvas.height
+      );
+    }
     
     // Draw each detection
     detections.forEach(detection => {
@@ -149,6 +239,32 @@ const App: React.FC = () => {
       ctx.fillText(label, x1 + 5, y1 - 5);
     });
   };
+  
+  // Save webhook URL
+  const saveSettings = () => {
+    // You could send this to your backend to update the webhook URL
+    fetch('http://localhost:8000/api/settings/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ 
+        webhook_url: webhookUrl,
+        suspicious_behavior_enabled: suspiciousBehaviorEnabled
+      }),
+    }).then(response => {
+      if (response.ok) {
+        setShowSettings(false);
+      }
+    }).catch(err => {
+      console.error("Error saving settings:", err);
+    });
+  };
+
+  // Clear all alerts
+  const clearAlerts = () => {
+    setAlerts([]);
+  };
 
   // Initialize webcam on component mount
   useEffect(() => {
@@ -166,44 +282,83 @@ const App: React.FC = () => {
 
   return (
     <div className="app-container">
-      <h1>Object Detection with YOLO</h1>
+      <h1>Object Detection with Suspicious Behavior Monitoring</h1>
       
       {error && <div className="error-message">{error}</div>}
       
-      <div className="video-container" style={{ position: 'relative' }}>
+      <div className="video-container">
         <video 
           ref={videoRef} 
           className="video-element" 
           muted 
-          style={{ width: '640px', height: '480px' }} // Make video visible
+          style={{ display: 'none' }}
         />
         <canvas 
           ref={canvasRef} 
           className="canvas-element"
-          style={{ 
-            position: 'absolute', 
-            top: 0, 
-            left: 0, 
-            width: '640px', 
-            height: '480px',
-            pointerEvents: 'none' // Allows interaction with video underneath
-          }}
         />
       </div>
       
       <div className="controls">
         {!isStreaming ? (
-          <button onClick={startStreaming} disabled={!!error}>
+          <button 
+            onClick={startStreaming} 
+            disabled={!!error}
+            className="start-btn"
+          >
             Start Detection
           </button>
         ) : (
-          <button onClick={stopStreaming}>
+          <button 
+            onClick={stopStreaming}
+            className="stop-btn"
+          >
             Stop Detection
           </button>
         )}
+        
+        <button 
+          onClick={() => setShowSettings(!showSettings)}
+          className="settings-btn"
+        >
+          Settings
+        </button>
       </div>
       
-      {isStreaming && (
+      {showSettings && (
+        <div className="settings-panel">
+          <h3>Settings</h3>
+          
+          <div className="setting-item">
+            <label>
+              <input
+                type="checkbox"
+                checked={suspiciousBehaviorEnabled}
+                onChange={(e) => setSuspiciousBehaviorEnabled(e.target.checked)}
+              />
+              Enable Suspicious Behavior Detection
+            </label>
+          </div>
+          
+          <div className="setting-item">
+            <label>Webhook URL:</label>
+            <input
+              type="text"
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+              placeholder="https://your-webhook-endpoint.com/alert"
+              className="webhook-input"
+            />
+          </div>
+          
+          <div className="setting-actions">
+            <button onClick={saveSettings}>Save</button>
+            <button onClick={() => setShowSettings(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+      
+      <div className="stats-alert-container">
         <div className="stats">
           <p>FPS: {fps}</p>
           <p>Detected Objects: {detections.length}</p>
@@ -215,7 +370,34 @@ const App: React.FC = () => {
             ))}
           </ul>
         </div>
-      )}
+        
+        <div className="alerts-panel">
+          <div className="alerts-header">
+            <h3>Suspicious Behavior Alerts</h3>
+            <button onClick={clearAlerts} className="clear-btn">Clear All</button>
+          </div>
+          
+          {alerts.length === 0 ? (
+            <p className="no-alerts">No alerts detected</p>
+          ) : (
+            <ul className="alerts-list">
+              {alerts.map((alert) => (
+                <li 
+                  key={alert.id} 
+                  className={`alert-item ${alert.isNew ? 'new-alert' : ''} ${alert.type.toLowerCase()}`}
+                >
+                  <div className="alert-time">
+                    {alert.timestamp.toLocaleTimeString()}
+                  </div>
+                  <div className="alert-content">
+                    <strong>{alert.type}</strong>: {alert.details}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
     </div>
   );
 };

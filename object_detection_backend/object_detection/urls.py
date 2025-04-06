@@ -4,4 +4,5 @@ from . import views
 
 urlpatterns = [
     path('detect/', views.detect_objects, name='detect_objects'),
+    path('settings/', views.update_settings, name='update_settings'),
 ]
